@@ -1,0 +1,110 @@
+{
+  "title": "Dominion Invaders",
+  "hook": "Command the starship U.S.S. AVALON",
+  "game_overview": "Take the captain chair on the starship bridge to allocate reactor power, calibrate shields, fire Phasers and Quantum torpedos, and navigate hostile Dominion War sectors.",
+  "artstyle": "modern-vector",
+  "genre": "action_adventure",
+  "winning_condition": "Successfully navigate through 5 hostile Dominion War sectors and neutralize the flagship threat.",
+  "losing_condition": "Starship hull integrity reaches 0% or reactor sustains critical meltdown.",
+  "player_mode": "single_player",
+  "supported_orientations": [
+    "landscape"
+  ],
+  "input_methods": [
+    "touch",
+    "mouse",
+    "keyboard",
+    "dpad"
+  ],
+  "score_options": {
+    "score_type": "points",
+    "score_order": "higher_is_better"
+  },
+  "low_end_device_support": true,
+  "mobile_playable": true,
+  "tv_playable": true,
+  "language": [
+    "en"
+  ],
+  "content_descriptors": [],
+  "controls": [
+    {
+      "input": "Mouse Click / Screen Tap",
+      "action": "Select and interact with bridge consoles (Weapons, Shields, Engines, Sensors, Repair)."
+    },
+    {
+      "input": "Number Keys 1-4 / Q, W, E, R",
+      "action": "Quick-switch active station console or trigger station emergency overdrive."
+    },
+    {
+      "input": "Arrow Keys / Virtual D-Pad / WASD",
+      "action": "Steer ship trajectory, adjust sublight thrusters, and aim tactical weapon reticle."
+    },
+    {
+      "input": "Spacebar / Action Button",
+      "action": "Fire tactical battery or initiate emergency warp evasive maneuver."
+    }
+  ],
+  "sections": [
+    {
+      "title": "Design Pillars",
+      "content": "1. Command Presence: The player experiences the tension of commanding an advanced starship through interactive bridge consoles and an expansive forward viewport. 2. Tactical Energy Distribution: Balancing reactor power between Shields, Weapons, Engines, and Life Support under fire. 3. Emergent Crisis Management: System breaches, hull fires, and electronic warfare force immediate tactical triage.",
+      "summary": "Tactical Multitasking, Diegetic Bridge Immersion, and Escalating Crisis Management."
+    },
+    {
+      "title": "Core Loop",
+      "content": "The captain scans sector anomalies on the navigation view, engages hostile interceptors and cosmic debris fields, directs subsystem power in real-time, dispatches automated repair drones to compromised bridge conduits, and activates the warp drive to enter next sector.",
+      "summary": "Sector Scan -> Alert Station -> Engage Threats & Hazards -> Repair & Upgrade -> Warp."
+    },
+    {
+      "title": "Core Mechanics",
+      "content": "1. Power Grid Distribution: Direct energy units between Kinetic Cannons, Deflector Shields, Sublight Thrusters, and Sensor Arrays. 2. Viewport Tactical Reticle: Aim and lock photon torpedoes and phase lasers at oncoming raiders and asteroids seen through the main forward viewport. 3. Subsystem Damage Control: Extinguish electrical conduit overloads and reboot offline telemetry nodes during red alert status.",
+      "summary": "Reactor Power Allocation, Viewport Combat Targeting, and Station Diagnostics."
+    },
+    {
+      "title": "Movement & Scrolling Alignment",
+      "content": "Scrolling Axis: Forward-facing 2D perspective (simulated 2.5D space vectoring through forward viewport). Asset Orientation Baseline: Hostile vessels, asteroids, and spatial anomalies fly towards the viewport or cross horizontally across the tactical screen. Controls: Responsive helm steering and target lock. Camera: Fixed bridge view with dynamic camera shake on hull impacts.",
+      "summary": "First-person Bridge Cockpit View with dynamic starfield motion."
+    },
+    {
+      "title": "Visual Hierarchy & Layering",
+      "content": "Layer 1 (Deep Space Background): Desaturated starfields, distant nebulae, and stellar phenomena. Layer 2 (Space Action / Viewport): High-contrast enemy ships, laser bolts, and meteor hazards. Layer 3 (Foreground Bridge Console): Diegetic glowing holographic displays, neon status meters, and tactical alert lights.",
+      "summary": "Distinct background nebula, mid-ground viewport threats, and crisp foreground interactive bridge consoles."
+    },
+    {
+      "title": "Characters & Enemies",
+      "content": "1. Bridge Captain & Crew Officers (Helm, Tactical, Engineering). 2. Swarm Interceptors: Agile small raiders making high-speed strafing runs. 3. Void Dreadnought: Heavy boss vessel equipped with particle beam cannons and point defense turrets. 4. Plasma Coronal Ejections: Environmental hazards requiring shield modulation.",
+      "summary": "Bridge Crew Personnel, Rogue Starfighter Drones, Heavy Void Frigates, and Cosmic Anomalies."
+    },
+    {
+      "title": "Fairness Tools",
+      "content": "360-degree mini-radar sweeps identify approaching threats 4 seconds before visual entry. Red proximity warnings alert the player to imminent torpedo impacts, giving time to trigger shield deflection.",
+      "summary": "Tactical Sensor Radar, Incoming Missile Warning HUD, and Emergency Shield Boost."
+    },
+    {
+      "title": "Juice & Game Feel",
+      "content": "Anticipation Juice: Torpedo lock reticle tightens and chirps rhythmically before launch. State Change Juice: Bridge lighting dynamically transitions from soft blue cruising illumination to pulsing amber yellow-alert and strobe red-alert. Impact Juice: Screen shake, spark bursts from consoles, and deep resonant bass explosions when enemy warships detonate.",
+      "summary": "Holographic interface glows, hull impact alarms, screen tremors, and warp streaks."
+    },
+    {
+      "title": "Social Mechanics & Audience",
+      "content": "Designed for players who love tactical command simulations, space exploration, and crisis management. High-score leaderboards rank captains by sectors cleared, efficiency, and minimal hull damage.",
+      "summary": "Sci-Fi strategy and arcade simulation fans seeking immersive spaceship command."
+    },
+    {
+      "title": "Accessibility",
+      "content": "Subsystem status icons use both distinct color coding and geometric symbols (triangle for shields, diamond for weapons, circle for engines). Includes key remapping and auto-fire targeting toggle.",
+      "summary": "Colorblind-friendly UI modes, adjustable combat speed, and fully scalable touch controls."
+    },
+    {
+      "title": "Structural Integrity",
+      "content": "Persistent campaign progress, ship upgrade terminal between sectors, sector jump map, and instantaneous restart capability.",
+      "summary": "Title Screen -> Station Tutorial -> Sector Campaign -> Victory / Defeat Recap."
+    },
+    {
+      "title": "Virtual Touch Controls Implementation",
+      "content": "Render on-screen virtual steering buttons and station shortcut triggers in the bottom corners when mobile viewport is detected. Direct pointer-events-auto applied strictly to interactive touch widgets with touch-none CSS class.",
+      "summary": "Custom mobile on-screen tactical control overlay."
+    }
+  ]
+}

@@ -1,0 +1,83 @@
+{
+  "schema": [
+    {
+      "name": "maxHullIntegrity",
+      "type": "number",
+      "label": "Max Hull Integrity",
+      "default": 100,
+      "min": 50,
+      "max": 250,
+      "step": 10
+    },
+    {
+      "name": "maxShieldCapacity",
+      "type": "number",
+      "label": "Max Shield Capacity",
+      "default": 100,
+      "min": 50,
+      "max": 200,
+      "step": 10
+    },
+    {
+      "name": "totalReactorPower",
+      "type": "number",
+      "label": "Total Reactor Energy Units",
+      "default": 10,
+      "min": 6,
+      "max": 16,
+      "step": 1
+    },
+    {
+      "name": "laserDamage",
+      "type": "number",
+      "label": "Phase Laser Base Damage",
+      "default": 20,
+      "min": 10,
+      "max": 50,
+      "step": 5
+    },
+    {
+      "name": "torpedoDamage",
+      "type": "number",
+      "label": "Quantum Torpedo Damage",
+      "default": 80,
+      "min": 40,
+      "max": 180,
+      "step": 10
+    },
+    {
+      "name": "shieldRechargeRate",
+      "type": "number",
+      "label": "Shield Recharge Rate",
+      "default": 12,
+      "min": 4,
+      "max": 30,
+      "step": 2
+    },
+    {
+      "name": "enemySpawnRate",
+      "type": "number",
+      "label": "Enemy Spawn Multiplier",
+      "default": 1,
+      "min": 0.5,
+      "max": 2.5,
+      "step": 0.1
+    },
+    {
+      "name": "autoAimAssist",
+      "type": "boolean",
+      "label": "Tactical Reticle Auto-Assist",
+      "default": true
+    }
+  ],
+  "values": {
+    "maxHullIntegrity": 100,
+    "maxShieldCapacity": 100,
+    "totalReactorPower": 10,
+    "laserDamage": 20,
+    "torpedoDamage": 80,
+    "shieldRechargeRate": 12,
+    "enemySpawnRate": 1,
+    "autoAimAssist": true
+  }
+}

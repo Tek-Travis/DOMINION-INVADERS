@@ -1,0 +1,10 @@
+sfx_laser.mp3
+sfx_torpedo.mp3
+sfx_explosion.mp3
+sfx_shield.mp3
+sfx_click.mp3
+sfx_error.mp3
+sfx_powerup.mp3
+sfx_pickup.mp3
+sfx_victory.mp3
+sfx_defeat.mp3
