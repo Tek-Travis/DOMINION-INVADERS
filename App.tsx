@@ -2,6 +2,7 @@
 /* eslint-disable */
 import {
   Play,
+  Pause,
   RotateCw,
   Volume2,
   VolumeX,
@@ -161,6 +162,20 @@ interface OfficerDialogue {
   color: string;
   timer: number;
 }
+
+interface FloatingText {
+  id: number;
+  text: string;
+  x: number;
+  y: number;
+  color: string;
+  life: number;
+  maxLife: number;
+}
+
+const BONUS_POINT_SECTORS = [
+  2, 3, 4, 6, 7, 8, 9, 11, 12, 13, 14, 16, 17, 18, 19, 21, 22, 23, 24, 25,
+];
 
 const CREW_SPRITE_CONFIG: Record<string, SpriteActionConfig> = {
   officer_captain_idle: {
@@ -343,18 +358,46 @@ const getSpaceViewport = () => {
     stepperRef.current = createFixedStepper(stepMs, maxSubSteps);
   }
 
-  // Audio toggles for pause/settings menu
+  // Audio toggles and volume sliders for pause/settings menu
   const [isMusicMuted, setIsMusicMuted] = useState(false);
   const [isSfxMuted, setIsSfxMuted] = useState(false);
+  const [musicVolume, setMusicVolume] = useState(0.4);
+  const [sfxVolume, setSfxVolume] = useState(0.6);
   const [isHowToPlayOpen, setIsHowToPlayOpen] = useState(false);
   const [isGameMenuOpen, setIsGameMenuOpen] = useState(false);
   const [isRosterOpen, setIsRosterOpen] = useState(false);
 
-  // Upgrade Terminal Modal between sectors
-  const [isUpgradeOpen, setIsUpgradeOpen] = useState(false);
+  // Sync SFX volume with GameAudio engine
+  useEffect(() => {
+    gameAudio.setVolume(isSfxMuted ? 0 : sfxVolume);
+  }, [sfxVolume, isSfxMuted]);
+
   const [dilithiumReserve, setDilithiumReserve] = useState(0);
 
-  // Persistent Ship Upgrades
+  // 4 Upgradable Systems (Weapons, Shields, Engines, Sensors) - 5 levels each (0 to 5)
+  const [subsystemLevels, setSubsystemLevels] = useState<{
+    weapons: number;
+    shields: number;
+    engines: number;
+    sensors: number;
+  }>({
+    weapons: 0,
+    shields: 0,
+    engines: 0,
+    sensors: 0,
+  });
+  const subsystemLevelsRef = useRef(subsystemLevels);
+  subsystemLevelsRef.current = subsystemLevels;
+
+  // Exactly 20 bonus points earned across rounds 2 to 25 (0 at start)
+  const [bonusPoints, setBonusPoints] = useState(0);
+  const bonusPointsRef = useRef(bonusPoints);
+  bonusPointsRef.current = bonusPoints;
+
+  // Floating combat text queue (CRIT and EVADED visual feedback)
+  const floatingTextsRef = useRef<FloatingText[]>([]);
+
+  // Persistent Ship Upgrades (legacy compatibility)
   const [shipUpgrades, setShipUpgrades] = useState({
     hullPlating: 0,
     cannonsMk: 0,
@@ -367,7 +410,7 @@ const getSpaceViewport = () => {
     () => ({
       status: 'START',
       score: 0,
-      level: 1, // Sector 1 to 5
+      level: 1, // Sector 1 to 25
       hull: (getConfig('maxHullIntegrity') as number) || 100,
       maxHull: (getConfig('maxHullIntegrity') as number) || 100,
       shields: (getConfig('maxShieldCapacity') as number) || 100,
@@ -411,14 +454,15 @@ const getSpaceViewport = () => {
 
   // Starship Simulation Dynamics
   const simRef = useRef({
-    hull: 1000,
-    shields: 1000,
+    hull: 100,
+    shields: 100,
     torpedoes: 5,
     score: 0,
     playerShipX: canvasWidth / 2,
     playerShipY: canvasHeight * 0.44,
     playerShipTilt: 0,
     playerShipThrustTimer: 0,
+    playerShipDodgeTimer: 0,
     sectorProgress: 0,
     enemiesDefeatedInSector: 0,
     cameraShake: 0,
@@ -568,11 +612,8 @@ const conduitsRef = useRef<BridgeConduit[]>([
 
   // --- Initialise Game Loop & Reset ---
   const initGame = useCallback(() => {
-    const initialMaxHull =
-      (getConfig('maxHullIntegrity') as number) + shipUpgrades.hullPlating * 25;
-    const initialMaxShield =
-      (getConfig('maxShieldCapacity') as number) +
-      shipUpgrades.shieldMatrix * 20;
+    const initialMaxHull = (getConfig('maxHullIntegrity') as number) || 100;
+    const initialMaxShield = (getConfig('maxShieldCapacity') as number) || 100;
 
     simRef.current = {
       hull: initialMaxHull,
@@ -583,6 +624,7 @@ const conduitsRef = useRef<BridgeConduit[]>([
       playerShipY: canvasHeight * 0.44,
       playerShipTilt: 0,
       playerShipThrustTimer: 0,
+      playerShipDodgeTimer: 0,
       sectorProgress: 0,
       enemiesDefeatedInSector: 0,
       cameraShake: 0,
@@ -602,12 +644,29 @@ const conduitsRef = useRef<BridgeConduit[]>([
     projectilesRef.current.length = 0;
     dropsRef.current.length = 0;
     particlesRef.current.length = 0;
+    floatingTextsRef.current.length = 0;
 
     // Reset conduits
     conduitsRef.current.forEach((c) => {
       c.damaged = false;
       c.sparkTimer = 0;
     });
+
+    // Reset 4 Subsystems and 20 Bonus Points
+    setSubsystemLevels({
+      weapons: 0,
+      shields: 0,
+      engines: 0,
+      sensors: 0,
+    });
+    subsystemLevelsRef.current = {
+      weapons: 0,
+      shields: 0,
+      engines: 0,
+      sensors: 0,
+    };
+    setBonusPoints(0);
+    bonusPointsRef.current = 0;
 
     setPowerGrid({
       weapons: 1,
@@ -640,7 +699,7 @@ const conduitsRef = useRef<BridgeConduit[]>([
     if (sdk) {
       sdk.startGame();
     }
-  }, [sdk, shipUpgrades, canvasWidth, canvasHeight, speakDialogue]);
+  }, [sdk, canvasWidth, canvasHeight, speakDialogue]);
 
   // Audio lifecycle reactions
   useEffect(() => {
@@ -666,40 +725,115 @@ const conduitsRef = useRef<BridgeConduit[]>([
     }
   }, [initGame]);
 
-// Manual power allocation is disabled.
-// System power is controlled by sector progression.
-const adjustPower = (_station: SubsystemId, _delta: number) => {
-  return;
-};
+  // Subsystem Bonus Point Allocation (Max 5 per system, total 20 points)
+  const allocateBonusPoint = (system: 'weapons' | 'shields' | 'engines' | 'sensors') => {
+    if (bonusPointsRef.current <= 0) return;
+    if (subsystemLevelsRef.current[system] >= 5) return;
 
-// Keyboard shortcuts for abilities only.
-useEffect(() => {
-  const handleKeyNav = (e: KeyboardEvent) => {
-    if (gameStateRef.current.status !== 'PLAYING') return;
+    setSubsystemLevels((prev) => {
+      const next = { ...prev, [system]: prev[system] + 1 };
+      subsystemLevelsRef.current = next;
+      return next;
+    });
+    setBonusPoints((prev) => {
+      const next = prev - 1;
+      bonusPointsRef.current = next;
+      return next;
+    });
+    gameAudio.playPowerupChime();
+  };
 
-    if (e.key.toLowerCase() === 't') {
-      triggerFireTorpedo();
-    } else if (e.key.toLowerCase() === 'f') {
-      triggerShieldDeflectorPulse();
-    } else if (e.key.toLowerCase() === 'c') {
-      triggerQuickRepair();
+  const refundBonusPoint = (system: 'weapons' | 'shields' | 'engines' | 'sensors') => {
+    if (subsystemLevelsRef.current[system] <= 0) return;
+
+    setSubsystemLevels((prev) => {
+      const next = { ...prev, [system]: prev[system] - 1 };
+      subsystemLevelsRef.current = next;
+      return next;
+    });
+    setBonusPoints((prev) => {
+      const next = prev + 1;
+      bonusPointsRef.current = next;
+      return next;
+    });
+    gameAudio.playCrispClick();
+  };
+
+  const adjustPower = (station: SubsystemId, delta: number) => {
+    if (delta > 0) {
+      allocateBonusPoint(station);
+    } else {
+      refundBonusPoint(station);
     }
   };
 
-  window.addEventListener('keydown', handleKeyNav);
-  return () => window.removeEventListener('keydown', handleKeyNav);
-}, []);
+  // Universal Pause / Unpause
+  const togglePause = useCallback(() => {
+    setGameState((prev) => {
+      if (prev.status === 'PLAYING') {
+        return { ...prev, status: 'PAUSED' };
+      } else if (prev.status === 'PAUSED') {
+        return { ...prev, status: 'PLAYING' };
+      }
+      return prev;
+    });
+  }, []);
+
+  const addFloatingText = (text: string, x: number, y: number, color: string) => {
+    floatingTextsRef.current.push({
+      id: Date.now() + Math.random(),
+      text,
+      x,
+      y,
+      color,
+      life: 0.65,
+      maxLife: 0.65,
+    });
+  };
+
+  // Keyboard navigation & shortcuts
+  useEffect(() => {
+    const handleKeyNav = (e: KeyboardEvent) => {
+      // Toggle pause at any time
+      if (e.key === 'p' || e.key === 'P' || e.key === 'Escape') {
+        if (gameStateRef.current.status === 'PLAYING' || gameStateRef.current.status === 'PAUSED') {
+          e.preventDefault();
+          togglePause();
+          return;
+        }
+      }
+
+      if (gameStateRef.current.status !== 'PLAYING') return;
+
+      if (e.key.toLowerCase() === 't') {
+        triggerFireTorpedo();
+      } else if (e.key.toLowerCase() === 'f') {
+        triggerShieldDeflectorPulse();
+      } else if (e.key.toLowerCase() === 'c') {
+        triggerQuickRepair();
+      }
+    };
+
+    window.addEventListener('keydown', handleKeyNav);
+    return () => window.removeEventListener('keydown', handleKeyNav);
+  }, [togglePause]);
 
 // Fire actions
 const triggerFireLaser = () => {
   const sim = simRef.current;
   if (sim.laserCooldown > 0) return;
 
-  const pGrid = powerGridRef.current;
+  const wpLevel = subsystemLevelsRef.current.weapons;
+  const senLevel = subsystemLevelsRef.current.sensors;
   const baseDmg = getConfig('laserDamage') as number;
-  const damageMultiplier =
-    1 + (pGrid.weapons - 1) * 0.25 + shipUpgrades.cannonsMk * 0.2;
-  const finalDamage = Math.round(baseDmg * damageMultiplier);
+  const damageMultiplier = 1.0 + wpLevel * 0.20;
+  let finalDamage = Math.round(baseDmg * damageMultiplier);
+
+  const critChance = senLevel * 0.10;
+  const isCrit = Math.random() < critChance;
+  if (isCrit) {
+    finalDamage *= 2;
+  }
 
   const reticle = reticleRef.current;
 
@@ -788,17 +922,33 @@ const triggerFireLaser = () => {
         enemy.health -= finalDamage;
       }
 
-      // Orange impact sparks.
-      for (let s = 0; s < 4; s++) {
-        spawnParticle(
-          endX,
-          endY,
-          (Math.random() - 0.5) * 160,
-          (Math.random() - 0.5) * 160,
-          Math.random() * 4 + 2,
-          '#ff6a00',
-          0.25,
-        );
+      if (isCrit) {
+        // Golden critical sparks & combat text
+        for (let s = 0; s < 8; s++) {
+          spawnParticle(
+            endX,
+            endY,
+            (Math.random() - 0.5) * 260,
+            (Math.random() - 0.5) * 260,
+            Math.random() * 5 + 3,
+            '#facc15',
+            0.35,
+          );
+        }
+        addFloatingText(`CRIT!`, endX, endY - 22, '#facc15');
+      } else {
+        // Orange impact sparks
+        for (let s = 0; s < 4; s++) {
+          spawnParticle(
+            endX,
+            endY,
+            (Math.random() - 0.5) * 160,
+            (Math.random() - 0.5) * 160,
+            Math.random() * 4 + 2,
+            '#ff6a00',
+            0.25,
+          );
+        }
       }
 
       if (enemy.health <= 0) {
@@ -826,7 +976,7 @@ const triggerFireLaser = () => {
 
   sim.laserCooldown = Math.max(
     0.1,
-    0.35 - (pGrid.weapons - 1) * 0.05,
+    0.35 - wpLevel * 0.04,
   );
 };
 
@@ -839,9 +989,9 @@ const triggerFireLaser = () => {
     setGameState((prev) => ({...prev, torpedoes: simRef.current.torpedoes}));
 
     const baseTorpDmg = getConfig('torpedoDamage') as number;
-    const pGrid = powerGridRef.current;
+    const wpLevel = subsystemLevelsRef.current.weapons;
     const finalDamage = Math.round(
-      baseTorpDmg * (1 + (pGrid.weapons - 1) * 0.2 + shipUpgrades.cannonsMk * 0.25),
+      baseTorpDmg * (1.0 + wpLevel * 0.20),
     );
 
     const reticle = reticleRef.current;
@@ -1160,7 +1310,7 @@ if (sim.warpJumpAnimation > 0) {
   );
 
   if (sim.warpJumpAnimation <= 0) {
-    if (level >= 5) {
+    if (level >= 25) {
       setGameState((prev) => ({
         ...prev,
         status: 'VICTORY',
@@ -1173,23 +1323,21 @@ if (sim.warpJumpAnimation > 0) {
       sim.sectorProgress = 0;
       sim.enemiesDefeatedInSector = 0;
 
-      // Award five torpedoes, carrying unused ammunition forward.
-      // Maximum ammunition capacity is 25.
+      // Award 5 torpedoes, carrying unused forward (max 25)
       sim.torpedoes = Math.min(25, sim.torpedoes + 5);
 
-      // All four systems gain a level on entering the next sector.
-      // Sector 2 = level 2; Sector 5 = maximum level 5.
-      const nextSystemLevel = Math.min(5, nextLevel);
+      // Award +1 bonus point if nextLevel is in BONUS_POINT_SECTORS
+      const earnsBonusPoint = BONUS_POINT_SECTORS.includes(nextLevel);
+      if (earnsBonusPoint) {
+        setBonusPoints((prev) => {
+          const next = prev + 1;
+          bonusPointsRef.current = next;
+          return next;
+        });
+      }
 
-      const nextPower: PowerGrid = {
-        weapons: nextSystemLevel,
-        shields: nextSystemLevel,
-        engines: nextSystemLevel,
-        sensors: nextSystemLevel,
-      };
-
-      powerGridRef.current = nextPower;
-      setPowerGrid(nextPower);
+      // Restore 25 hull integrity on sector transit
+      sim.hull = Math.min(100, sim.hull + 25);
 
       // Update the displayed sector and ammunition.
       setGameState((prev) => ({
@@ -1202,12 +1350,11 @@ if (sim.warpJumpAnimation > 0) {
       }));
 
       gameAudio.playPowerupChime();
-      setIsUpgradeOpen(true);
 
       speakDialogue(
         'Capt. Reynolds',
         'Command',
-        `Warp completed. Entering Sector ${nextLevel}. All systems upgraded to level ${nextSystemLevel}!`,
+        `Warp completed. Entering Sector ${nextLevel}/25. All stations ready!`,
         '#fbbf24',
       );
     }
@@ -1216,66 +1363,236 @@ if (sim.warpJumpAnimation > 0) {
   return;
 }
 
-// --- ENEMY SPAWNING & COMBAT ARENA MANAGEMENT ---
+// --- ENEMY SPAWNING & COMBAT ARENA MANAGEMENT (25 SECTORS) ---
 const spawnMultiplier = getConfig('enemySpawnRate') as number;
-
-// Maximum active ships, asteroids, and mines in sectors 1–5.
-// The boss also counts toward this limit.
-const threatLimits = [1, 1, 2, 2, 3];
-const maxEnemiesOnScreen = threatLimits[level - 1] ?? 6;
-
-// Arrival pace: 1 = original, 0.5 = half the spawn chance.
-const spawnPace = 0.15;
+const maxEnemiesOnScreen = Math.min(6, 2 + Math.floor((level - 1) / 5));
+const spawnPace = 0.16;
 
 if (
   enemies.length < maxEnemiesOnScreen &&
   Math.random() <
-    0.035 * spawnMultiplier * (1 + level * 0.15) * spawnPace
+    0.035 * spawnMultiplier * (1 + level * 0.08) * spawnPace
 ) {
-  const isBossSector = level === 5;
-  const hasBossSpawned = enemies.some((e) => e.type === 'dreadnought');
+  const isBossSector = level % 5 === 0;
+  const hasBossSpawned = enemies.some(
+    (e) =>
+      e.type === 'dreadnought' ||
+      (isBossSector && e.maxHealth >= 350 && (e.type === 'cruiser' || e.type === 'corsair')),
+  );
 
-  if (isBossSector && !hasBossSpawned && sim.sectorProgress >= 25) {
-    const dreadRatio =
-      (getConfig('assetEnemyBossDreadnoughtAspectRatio') as number) ||
-      865 / 462;
-
-    const bW = 320;
-    const bH = Math.round(bW / dreadRatio);
-
-    enemies.push({
-      id: `boss_${Date.now()}`,
-      type: 'dreadnought',
-      x: canvasWidth / 2,
-      y: canvasHeight * 0.22,
-      z: 700,
-      vx: 30,
-      vy: 0,
-      vz: -35,
-      width: bW * 0.3,
-      height: bH * 0.3,
-      baseWidth: bW,
-      baseHeight: bH,
-      aspectRatio: dreadRatio,
-      health: 1500,
-      maxHealth: 1500,
-      shield: 600,
-      maxShield: 600,
-      fireCooldown: 1.5,
-      rotation: 0,
-      rotSpeed: 0,
-      scoreValue: 6000,
-      phase: 1,
-    });
-
-    sim.alertStatus = 'RED';
-
-    speakDialogue(
-      "Lt. T'Mera",
-      'Science',
-      'RED ALERT! Alien Flagship Command Dreadnought detected on intercept vector!',
-      '#ef4444',
-    );
+  if (isBossSector && !hasBossSpawned && sim.sectorProgress >= 20) {
+    if (level === 5) {
+      // Sector 5 Boss: Void Vanguard Cruiser
+      const cruiserRatio =
+        (getConfig('assetEnemyVoidCruiserAspectRatio') as number) || 883 / 367;
+      const bW = 240;
+      const bH = Math.round(bW / cruiserRatio);
+      enemies.push({
+        id: `boss_vanguard_${Date.now()}`,
+        type: 'cruiser',
+        x: canvasWidth / 2,
+        y: canvasHeight * 0.22,
+        z: 700,
+        vx: 35,
+        vy: 0,
+        vz: -25,
+        width: bW * 0.45,
+        height: bH * 0.45,
+        baseWidth: bW,
+        baseHeight: bH,
+        aspectRatio: cruiserRatio,
+        health: 450,
+        maxHealth: 450,
+        shield: 200,
+        maxShield: 200,
+        fireCooldown: 1.6,
+        rotation: 0,
+        rotSpeed: 0,
+        scoreValue: 2500,
+        phase: 1,
+      });
+      sim.alertStatus = 'RED';
+      speakDialogue(
+        "Lt. T'Mera",
+        'Science',
+        'RED ALERT! Sector 5 Boss: Dominion Vanguard Cruiser detected!',
+        '#ef4444',
+      );
+    } else if (level === 10) {
+      // Sector 10 Boss: Twin Strike Cruisers
+      const cruiserRatio =
+        (getConfig('assetEnemyVoidCruiserAspectRatio') as number) || 883 / 367;
+      const bW = 220;
+      const bH = Math.round(bW / cruiserRatio);
+      enemies.push(
+        {
+          id: `boss_twin_1_${Date.now()}`,
+          type: 'cruiser',
+          x: canvasWidth * 0.35,
+          y: canvasHeight * 0.22,
+          z: 720,
+          vx: 30,
+          vy: 0,
+          vz: -25,
+          width: bW * 0.42,
+          height: bH * 0.42,
+          baseWidth: bW,
+          baseHeight: bH,
+          aspectRatio: cruiserRatio,
+          health: 500,
+          maxHealth: 500,
+          shield: 250,
+          maxShield: 250,
+          fireCooldown: 1.8,
+          rotation: 0,
+          rotSpeed: 0,
+          scoreValue: 2000,
+          phase: 1,
+        },
+        {
+          id: `boss_twin_2_${Date.now()}`,
+          type: 'cruiser',
+          x: canvasWidth * 0.65,
+          y: canvasHeight * 0.22,
+          z: 720,
+          vx: -30,
+          vy: 0,
+          vz: -25,
+          width: bW * 0.42,
+          height: bH * 0.42,
+          baseWidth: bW,
+          baseHeight: bH,
+          aspectRatio: cruiserRatio,
+          health: 500,
+          maxHealth: 500,
+          shield: 250,
+          maxShield: 250,
+          fireCooldown: 1.8,
+          rotation: 0,
+          rotSpeed: 0,
+          scoreValue: 2000,
+          phase: 1,
+        },
+      );
+      sim.alertStatus = 'RED';
+      speakDialogue(
+        'Cmdr. Vance',
+        'Tactical',
+        'RED ALERT! Sector 10 Boss: Dominion Twin Strike Cruisers closing in!',
+        '#ef4444',
+      );
+    } else if (level === 15) {
+      // Sector 15 Boss: Armored Corsair Warlord
+      const corsairRatio =
+        (getConfig('assetStarshipEnemyCruiserAspectRatio') as number) || 909 / 574;
+      const bW = 260;
+      const bH = Math.round(bW / corsairRatio);
+      enemies.push({
+        id: `boss_corsair_${Date.now()}`,
+        type: 'corsair',
+        x: canvasWidth / 2,
+        y: canvasHeight * 0.24,
+        z: 700,
+        vx: 40,
+        vy: 0,
+        vz: -22,
+        width: bW * 0.45,
+        height: bH * 0.45,
+        baseWidth: bW,
+        baseHeight: bH,
+        aspectRatio: corsairRatio,
+        health: 1000,
+        maxHealth: 1000,
+        shield: 500,
+        maxShield: 500,
+        fireCooldown: 1.5,
+        rotation: 0,
+        rotSpeed: 0,
+        scoreValue: 5000,
+        phase: 1,
+      });
+      sim.alertStatus = 'RED';
+      speakDialogue(
+        "Lt. T'Mera",
+        'Science',
+        'RED ALERT! Sector 15 Boss: Armored Corsair Warlord locking weapons!',
+        '#ef4444',
+      );
+    } else if (level === 20) {
+      // Sector 20 Boss: Dominion Battle Dreadnought
+      const dreadRatio =
+        (getConfig('assetEnemyBossDreadnoughtAspectRatio') as number) || 865 / 462;
+      const bW = 310;
+      const bH = Math.round(bW / dreadRatio);
+      enemies.push({
+        id: `boss_dread_20_${Date.now()}`,
+        type: 'dreadnought',
+        x: canvasWidth / 2,
+        y: canvasHeight * 0.22,
+        z: 700,
+        vx: 28,
+        vy: 0,
+        vz: -20,
+        width: bW * 0.4,
+        height: bH * 0.4,
+        baseWidth: bW,
+        baseHeight: bH,
+        aspectRatio: dreadRatio,
+        health: 1800,
+        maxHealth: 1800,
+        shield: 800,
+        maxShield: 800,
+        fireCooldown: 1.6,
+        rotation: 0,
+        rotSpeed: 0,
+        scoreValue: 8000,
+        phase: 1,
+      });
+      sim.alertStatus = 'RED';
+      speakDialogue(
+        'Capt. Reynolds',
+        'Command',
+        'RED ALERT! Sector 20 Boss: Dominion Battle Dreadnought entering viewport!',
+        '#ef4444',
+      );
+    } else if (level === 25) {
+      // Sector 25 Boss: Supreme Command Dreadnought (Final Boss!)
+      const dreadRatio =
+        (getConfig('assetEnemyBossDreadnoughtAspectRatio') as number) || 865 / 462;
+      const bW = 340;
+      const bH = Math.round(bW / dreadRatio);
+      enemies.push({
+        id: `boss_supreme_${Date.now()}`,
+        type: 'dreadnought',
+        x: canvasWidth / 2,
+        y: canvasHeight * 0.22,
+        z: 700,
+        vx: 32,
+        vy: 0,
+        vz: -18,
+        width: bW * 0.45,
+        height: bH * 0.45,
+        baseWidth: bW,
+        baseHeight: bH,
+        aspectRatio: dreadRatio,
+        health: 2600,
+        maxHealth: 2600,
+        shield: 1200,
+        maxShield: 1200,
+        fireCooldown: 1.4,
+        rotation: 0,
+        rotSpeed: 0,
+        scoreValue: 15000,
+        phase: 1,
+      });
+      sim.alertStatus = 'RED';
+      speakDialogue(
+        'Capt. Reynolds',
+        'Command',
+        'RED ALERT! FINAL SECTOR 25: Supreme Dominion Flagship Dreadnought engaged! Fire at will!',
+        '#ef4444',
+      );
+    }
   } else {
     const roll = Math.random();
 
@@ -1543,11 +1860,21 @@ if (
         }
       }
 
-      // Proximity Impact / Collision with Starship
-      if (e.z <= 120) {
-        const impactDamage =
-          e.type === 'asteroid' ? 25 : e.type === 'plasma_mine' ? 35 : 45;
-        applyDamageToShip(impactDamage);
+      // Keep enemy warships in combat range - they DO NOT crash into the starship and must be destroyed!
+      if (e.type !== 'asteroid' && e.type !== 'plasma_mine') {
+        if (e.z <= 220 && e.vz < 0) {
+          e.vz = Math.abs(e.vz) * (0.85 + Math.random() * 0.35);
+          e.vx = (Math.random() - 0.5) * 160;
+        } else if (e.z >= 680 && e.vz > 0) {
+          e.vz = -Math.abs(e.vz);
+        }
+      }
+
+      // Cosmic Hazards (Asteroids and Plasma Mines) WILL crash into the player ship if not destroyed!
+      if (e.z <= 120 && (e.type === 'asteroid' || e.type === 'plasma_mine')) {
+        // Asteroids specifically damage SHIELDS; Mines specifically damage HULL
+        const impactDamage = e.type === 'asteroid' ? 40 : 30;
+        applyHazardDamageToShip(e.type, impactDamage);
         gameAudio.playChiptuneExplosion();
 
         for (let p = 0; p < 14; p++) {
@@ -1557,7 +1884,7 @@ if (
             (Math.random() - 0.5) * 350,
             (Math.random() - 0.5) * 350,
             Math.random() * 6 + 3,
-            '#f97316',
+            e.type === 'asteroid' ? '#94a3b8' : '#a855f7',
             0.45,
           );
         }
@@ -1755,6 +2082,18 @@ if (
       }
     }
 
+    // --- UPDATE FLOATING COMBAT TEXTS ---
+    const ftexts = floatingTextsRef.current;
+    for (let fIdx = ftexts.length - 1; fIdx >= 0; fIdx--) {
+      const ft = ftexts[fIdx];
+      ft.life -= dt;
+      ft.y -= 40 * dt;
+      if (ft.life <= 0) {
+        ftexts[fIdx] = ftexts[ftexts.length - 1];
+        ftexts.pop();
+      }
+    }
+
     // --- UPDATE CONDUIT SPARKS ---
     const conduits = conduitsRef.current;
     for (let cIdx = 0; cIdx < conduits.length; cIdx++) {
@@ -1788,21 +2127,32 @@ if (
       sim.alertStatus = 'NORMAL';
     }
 
-    // Sector Progress & Warp trigger
+    // Sector Progress & Warp trigger (25 Sectors)
     if (sim.warpJumpAnimation <= 0) {
-      const targetKills = 6 + level * 3;
+      const isBossLevel = level % 5 === 0;
+      const targetKills = isBossLevel ? 1 : Math.min(18, 5 + level);
       sim.sectorProgress = Math.min(
         100,
         Math.round((sim.enemiesDefeatedInSector / targetKills) * 100),
       );
 
-      if (sim.sectorProgress >= 100 && enemies.length === 0) {
+      const hasBossAlive = enemies.some(
+        (e) =>
+          e.type === 'dreadnought' ||
+          (isBossLevel && e.maxHealth >= 350 && (e.type === 'cruiser' || e.type === 'corsair')),
+      );
+
+      if (sim.sectorProgress >= 100 && enemies.length === 0 && !hasBossAlive) {
+        if (level >= 25) {
+          setGameState((prev) => ({...prev, status: 'VICTORY'}));
+          return;
+        }
         sim.warpJumpAnimation = 2.5;
         gameAudio.playVictoryFanfare();
         speakDialogue(
           'Capt. Reynolds',
           'Command',
-          'Sector cleared! Engaging warp drive to next waypoint.',
+          `Sector ${level} cleared! Engaging warp drive to next waypoint.`,
           '#fbbf24',
         );
       }
@@ -1841,15 +2191,15 @@ if (
   // Helper when taking ship damage
   const applyDamageToShip = (rawDamage: number) => {
     const sim = simRef.current;
-    const pGrid = powerGridRef.current;
-
-    const pulseMod = sim.shieldPulseActiveTimer > 0 ? 0.2 : 1.0;
-    const dodgeChance = pGrid.engines * 0.05;
+    const dodgeChance = subsystemLevelsRef.current.engines * 0.08;
     if (Math.random() < dodgeChance) {
+      sim.playerShipDodgeTimer = 0.4;
+      addFloatingText('EVADED!', sim.playerShipX, sim.playerShipY - 45, '#38bdf8');
       gameAudio.playShieldBlock();
       return;
     }
 
+    const pulseMod = sim.shieldPulseActiveTimer > 0 ? 0.2 : 1.0;
     const actualDmg = rawDamage * pulseMod;
     sim.cameraShake = Math.min(20, sim.cameraShake + actualDmg * 0.45);
 
@@ -1876,6 +2226,58 @@ if (
             '#ef4444',
           );
         }
+      }
+    }
+
+    if (sim.hull <= 0) {
+      sim.hull = 0;
+      setGameState((prev) => ({...prev, status: 'GAME_OVER'}));
+    }
+  };
+
+  // Helper when cosmic hazards (Asteroids and Mines) hit the starship
+  const applyHazardDamageToShip = (hazardType: 'asteroid' | 'plasma_mine', rawDamage: number) => {
+    const sim = simRef.current;
+    const dodgeChance = subsystemLevelsRef.current.engines * 0.08;
+    if (Math.random() < dodgeChance) {
+      sim.playerShipDodgeTimer = 0.4;
+      addFloatingText('EVADED!', sim.playerShipX, sim.playerShipY - 45, '#38bdf8');
+      gameAudio.playShieldBlock();
+      return;
+    }
+
+    const pulseMod = sim.shieldPulseActiveTimer > 0 ? 0.2 : 1.0;
+    const actualDmg = rawDamage * pulseMod;
+    sim.cameraShake = Math.min(20, sim.cameraShake + actualDmg * 0.5);
+
+    if (hazardType === 'asteroid') {
+      // ASTEROIDS damage the player's SHIELDS
+      if (sim.shields > 0) {
+        const absorbed = Math.min(sim.shields, actualDmg);
+        sim.shields -= absorbed;
+        const leftover = actualDmg - absorbed;
+        sim.hull -= leftover;
+        gameAudio.playShieldBlock();
+      } else {
+        sim.hull -= actualDmg;
+        gameAudio.playGunshotBlast();
+      }
+    } else {
+      // MINES pierce shields and damage the player's HULL directly
+      sim.hull -= actualDmg;
+      gameAudio.playGunshotBlast();
+
+      const undamagedConduits = conduitsRef.current.filter((c) => !c.damaged);
+      if (undamagedConduits.length > 0) {
+        const randomConduit =
+          undamagedConduits[Math.floor(Math.random() * undamagedConduits.length)];
+        randomConduit.damaged = true;
+        speakDialogue(
+          'Chief O\'Malley',
+          'Engineering',
+          `Plasma Mine detonation! Console overload at ${randomConduit.name}!`,
+          '#ef4444',
+        );
       }
     }
 
@@ -2379,6 +2781,14 @@ const shakeY =
     const shipH = 84;
     const playerShipImg = assets['starship_player'];
 
+    if (sim.playerShipDodgeTimer > 0 && playerShipImg && playerShipImg.complete) {
+      ctx.save();
+      ctx.globalAlpha = 0.5 * (sim.playerShipDodgeTimer / 0.4);
+      ctx.drawImage(playerShipImg, -shipW / 2 - 16, -shipH / 2, shipW, shipH);
+      ctx.drawImage(playerShipImg, -shipW / 2 + 16, -shipH / 2, shipW, shipH);
+      ctx.restore();
+    }
+
     drawAsset(
       ctx,
       playerShipImg,
@@ -2429,6 +2839,22 @@ const shakeY =
       ctx.fill();
     }
     ctx.restore();
+
+    // 2F. Draw Floating Combat Texts (Crits and Dodges)
+    const ftexts = floatingTextsRef.current;
+    for (let i = 0; i < ftexts.length; i++) {
+      const ft = ftexts[i];
+      const alpha = Math.max(0, ft.life / ft.maxLife);
+      ctx.save();
+      ctx.globalAlpha = alpha;
+      ctx.fillStyle = ft.color;
+      ctx.font = 'bold 15px monospace';
+      ctx.textAlign = 'center';
+      ctx.shadowColor = ft.color;
+      ctx.shadowBlur = 8;
+      ctx.fillText(ft.text, ft.x, ft.y);
+      ctx.restore();
+    }
 
     // ==========================================
     // LAYER 3: VIEWSCREEN FRAME & HOLOGRAPHIC TACTICAL RETICLE
@@ -2675,6 +3101,7 @@ if (bridgeImg && bridgeImg.complete && bridgeImg.naturalWidth > 0) {
         url={BACKGROUND_MUSIC_URL}
         isPlaying={isMusicPlaying}
         isMuted={isMusicMuted}
+        volume={musicVolume}
       />
 
       {/* TOP DIEGETIC COMMAND HUD BAR */}
@@ -2689,7 +3116,7 @@ if (bridgeImg && bridgeImg.complete && bridgeImg.naturalWidth > 0) {
           <div className="flex items-center gap-1.5 bg-slate-800/80 px-2 py-0.5 rounded border border-slate-700 text-xs">
             <span className="text-slate-400">SECTOR:</span>
             <span className="text-yellow-400 font-bold font-mono">
-              {gameState.level}/5
+              {gameState.level}/25
             </span>
             <span className="text-slate-500">|</span>
             <span className="text-slate-400">WARP:</span>
@@ -2753,16 +3180,25 @@ if (bridgeImg && bridgeImg.complete && bridgeImg.naturalWidth > 0) {
           </div>
         </div>
 
-        {/* Right: Dilithium, Score, Crew Roster & Menu */}
+        {/* Right: Score, Pause, Crew Roster & Menu */}
         <div className="flex items-center gap-2 sm:gap-3">
-          <div className="flex items-center gap-1 bg-amber-950/60 text-amber-300 px-2 py-0.5 rounded border border-amber-600/40 text-xs">
-            <Sparkles size={13} />
-            <span className="font-bold">{dilithiumReserve}</span>
-          </div>
           <div className="flex items-center gap-1 bg-slate-800 px-2 py-0.5 rounded border border-slate-700 text-xs text-yellow-400 font-bold">
             <Trophy size={13} />
             <span>{gameState.score}</span>
           </div>
+
+          {/* Dedicated Pause / Unpause Button */}
+          <button
+            onClick={togglePause}
+            title={gameState.status === 'PAUSED' ? 'Resume Command (P / Esc)' : 'Pause Command (P / Esc)'}
+            className={`p-1.5 rounded-lg border flex items-center gap-1 text-xs font-bold transition-all min-w-[34px] min-h-[34px] ${
+              gameState.status === 'PAUSED'
+                ? 'bg-amber-500 hover:bg-amber-400 text-slate-950 border-amber-300 shadow-[0_0_12px_rgba(245,158,11,0.6)]'
+                : 'bg-slate-800 hover:bg-slate-700 text-amber-300 border-amber-500/40'
+            }`}>
+            {gameState.status === 'PAUSED' ? <Play size={16} /> : <Pause size={16} />}
+            <span className="hidden md:inline">{gameState.status === 'PAUSED' ? 'RESUME' : 'PAUSE'}</span>
+          </button>
 
           {/* Officer Roster modal trigger */}
           <button
@@ -2797,43 +3233,74 @@ if (bridgeImg && bridgeImg.complete && bridgeImg.naturalWidth > 0) {
 
         {/* Warp Jump Streak Banner Alert */}
         {simRef.current.warpJumpAnimation > 0 && (
-          <div className="absolute inset-0 z-30 flex flex-col items-center justify-center bg-cyan-950/50 backdrop-blur-sm pointer-events-none">
+          <div className="absolute inset-0 z-30 flex flex-col items-center justify-center bg-cyan-950/60 backdrop-blur-sm pointer-events-none text-center px-4">
             <h2 className="text-3xl sm:text-5xl font-black text-cyan-300 tracking-widest animate-pulse drop-shadow-[0_0_20px_#06b6d4]">
               WARP ENGAGED
             </h2>
-            <p className="text-slate-200 mt-2 text-sm sm:text-lg">
-              JUMPING TO SECTOR {gameState.level + 1}...
+            <p className="text-slate-100 mt-2 text-base sm:text-xl font-bold font-mono">
+              TRANSITING TO SECTOR {gameState.level} / 25
             </p>
+            {gameState.level % 5 === 0 ? (
+              <div className="mt-3 px-4 py-1.5 bg-red-950/90 border-2 border-red-500 rounded-full text-red-300 font-black text-xs sm:text-sm tracking-wider animate-bounce">
+                ⚠️ RED ALERT: DOMINION FLAGSHIP IN SECTOR!
+              </div>
+            ) : BONUS_POINT_SECTORS.includes(gameState.level) ? (
+              <div className="mt-3 px-4 py-1.5 bg-amber-950/80 border border-amber-500 rounded-full text-amber-300 font-bold text-xs sm:text-sm flex items-center gap-1.5 shadow-lg">
+                <Sparkles size={16} className="text-amber-400" />
+                <span>+1 SUBSYSTEM BONUS POINT AWARDED</span>
+              </div>
+            ) : null}
           </div>
         )}
       </div>
 
-      {/* BOTTOM DIEGETIC CONSOLE & POWER GRID CONTROL BAR */}
+      {/* BOTTOM DIEGETIC CONSOLE & 4-SYSTEM UPGRADE BAR */}
       <footer className="w-full bg-slate-900/95 border-t border-cyan-500/30 px-3 py-2 flex flex-wrap items-center justify-between gap-2 z-20 shrink-0 shadow-2xl">
-        {/* Power Grid Subsystem Allocation */}
+        {/* 4 Systems (Weapons, Shields, Engines, Sensors) - 5 Levels Each */}
         <div className="flex items-center gap-2 sm:gap-3 overflow-x-auto py-1">
+          {/* Available Bonus Points Badge */}
+          <div
+            className={`flex items-center gap-1.5 px-2.5 py-1 rounded-lg border font-mono text-xs font-bold transition-all ${
+              bonusPoints > 0
+                ? 'bg-amber-950/90 text-amber-300 border-amber-400 animate-pulse shadow-[0_0_10px_rgba(245,158,11,0.5)]'
+                : 'bg-slate-800 text-slate-400 border-slate-700'
+            }`}>
+            <Sparkles size={14} className={bonusPoints > 0 ? 'text-yellow-400' : 'text-slate-500'} />
+            <span>POINTS: {bonusPoints}</span>
+          </div>
+
           {/* WEAPONS */}
           <div className="flex items-center gap-1.5 bg-slate-800/90 px-2 py-1 rounded border border-red-500/40">
             <Zap size={14} className="text-red-400" />
-            <span className="text-[11px] font-bold text-red-300">WPN (1)</span>
-            <div className="flex gap-0.5 mx-1">
-              {[...Array(6)].map((_, i) => (
+            <span className="text-[11px] font-bold text-red-300" title="+20% Weapon Damage per Level">
+              WPN ({subsystemLevels.weapons}/5)
+            </span>
+            <div className="flex gap-0.5 mx-1" title={`+${subsystemLevels.weapons * 20}% Damage`}>
+              {[...Array(5)].map((_, i) => (
                 <div
                   key={i}
                   className={`w-2 h-3.5 rounded-sm ${
-                    i < powerGrid.weapons ? 'bg-red-500' : 'bg-slate-700'
+                    i < subsystemLevels.weapons ? 'bg-red-500 shadow-[0_0_4px_#ef4444]' : 'bg-slate-700'
                   }`}
                 />
               ))}
             </div>
             <button
-              onClick={() => adjustPower('weapons', -1)}
-              className="w-5 h-5 bg-slate-700 hover:bg-slate-600 rounded text-xs text-white font-bold flex items-center justify-center">
+              onClick={() => refundBonusPoint('weapons')}
+              disabled={subsystemLevels.weapons <= 0}
+              className={`w-5 h-5 rounded text-xs font-bold flex items-center justify-center ${
+                subsystemLevels.weapons > 0 ? 'bg-slate-700 hover:bg-slate-600 text-white' : 'bg-slate-800 text-slate-600 cursor-not-allowed'
+              }`}>
               -
             </button>
             <button
-              onClick={() => adjustPower('weapons', 1)}
-              className="w-5 h-5 bg-red-600 hover:bg-red-500 rounded text-xs text-white font-bold flex items-center justify-center">
+              onClick={() => allocateBonusPoint('weapons')}
+              disabled={bonusPoints <= 0 || subsystemLevels.weapons >= 5}
+              className={`w-5 h-5 rounded text-xs font-bold flex items-center justify-center ${
+                bonusPoints > 0 && subsystemLevels.weapons < 5
+                  ? 'bg-red-600 hover:bg-red-500 text-white animate-pulse'
+                  : 'bg-slate-800 text-slate-600 cursor-not-allowed'
+              }`}>
               +
             </button>
           </div>
@@ -2841,79 +3308,107 @@ if (bridgeImg && bridgeImg.complete && bridgeImg.naturalWidth > 0) {
           {/* SHIELDS */}
           <div className="flex items-center gap-1.5 bg-slate-800/90 px-2 py-1 rounded border border-cyan-500/40">
             <Shield size={14} className="text-cyan-400" />
-            <span className="text-[11px] font-bold text-cyan-300">SHD (2)</span>
-            <div className="flex gap-0.5 mx-1">
-              {[...Array(6)].map((_, i) => (
+            <span className="text-[11px] font-bold text-cyan-300" title="+40 Max Shields & +10% Regen per Level">
+              SHD ({subsystemLevels.shields}/5)
+            </span>
+            <div className="flex gap-0.5 mx-1" title={`Max Shields: ${100 + subsystemLevels.shields * 40}`}>
+              {[...Array(5)].map((_, i) => (
                 <div
                   key={i}
                   className={`w-2 h-3.5 rounded-sm ${
-                    i < powerGrid.shields ? 'bg-cyan-400' : 'bg-slate-700'
+                    i < subsystemLevels.shields ? 'bg-cyan-400 shadow-[0_0_4px_#06b6d4]' : 'bg-slate-700'
                   }`}
                 />
               ))}
             </div>
             <button
-              onClick={() => adjustPower('shields', -1)}
-              className="w-5 h-5 bg-slate-700 hover:bg-slate-600 rounded text-xs text-white font-bold flex items-center justify-center">
+              onClick={() => refundBonusPoint('shields')}
+              disabled={subsystemLevels.shields <= 0}
+              className={`w-5 h-5 rounded text-xs font-bold flex items-center justify-center ${
+                subsystemLevels.shields > 0 ? 'bg-slate-700 hover:bg-slate-600 text-white' : 'bg-slate-800 text-slate-600 cursor-not-allowed'
+              }`}>
               -
             </button>
             <button
-              onClick={() => adjustPower('shields', 1)}
-              className="w-5 h-5 bg-cyan-600 hover:bg-cyan-500 rounded text-xs text-white font-bold flex items-center justify-center">
+              onClick={() => allocateBonusPoint('shields')}
+              disabled={bonusPoints <= 0 || subsystemLevels.shields >= 5}
+              className={`w-5 h-5 rounded text-xs font-bold flex items-center justify-center ${
+                bonusPoints > 0 && subsystemLevels.shields < 5
+                  ? 'bg-cyan-600 hover:bg-cyan-500 text-white animate-pulse'
+                  : 'bg-slate-800 text-slate-600 cursor-not-allowed'
+              }`}>
               +
             </button>
           </div>
 
-          {/* ENGINES */}
+          {/* ENGINES (DODGE) */}
           <div className="flex items-center gap-1.5 bg-slate-800/90 px-2 py-1 rounded border border-amber-500/40">
             <Gauge size={14} className="text-amber-400" />
-            <span className="text-[11px] font-bold text-amber-300">ENG (3)</span>
-            <div className="flex gap-0.5 mx-1">
-              {[...Array(6)].map((_, i) => (
+            <span className="text-[11px] font-bold text-amber-300" title="+8% Dodge Chance per Level">
+              ENG ({subsystemLevels.engines}/5)
+            </span>
+            <div className="flex gap-0.5 mx-1" title={`${subsystemLevels.engines * 8}% Dodge Chance`}>
+              {[...Array(5)].map((_, i) => (
                 <div
                   key={i}
                   className={`w-2 h-3.5 rounded-sm ${
-                    i < powerGrid.engines ? 'bg-amber-400' : 'bg-slate-700'
+                    i < subsystemLevels.engines ? 'bg-amber-400 shadow-[0_0_4px_#f59e0b]' : 'bg-slate-700'
                   }`}
                 />
               ))}
             </div>
             <button
-              onClick={() => adjustPower('engines', -1)}
-              className="w-5 h-5 bg-slate-700 hover:bg-slate-600 rounded text-xs text-white font-bold flex items-center justify-center">
+              onClick={() => refundBonusPoint('engines')}
+              disabled={subsystemLevels.engines <= 0}
+              className={`w-5 h-5 rounded text-xs font-bold flex items-center justify-center ${
+                subsystemLevels.engines > 0 ? 'bg-slate-700 hover:bg-slate-600 text-white' : 'bg-slate-800 text-slate-600 cursor-not-allowed'
+              }`}>
               -
             </button>
             <button
-              onClick={() => adjustPower('engines', 1)}
-              className="w-5 h-5 bg-amber-600 hover:bg-amber-500 rounded text-xs text-white font-bold flex items-center justify-center">
+              onClick={() => allocateBonusPoint('engines')}
+              disabled={bonusPoints <= 0 || subsystemLevels.engines >= 5}
+              className={`w-5 h-5 rounded text-xs font-bold flex items-center justify-center ${
+                bonusPoints > 0 && subsystemLevels.engines < 5
+                  ? 'bg-amber-600 hover:bg-amber-500 text-white animate-pulse'
+                  : 'bg-slate-800 text-slate-600 cursor-not-allowed'
+              }`}>
               +
             </button>
           </div>
 
-          {/* SENSORS */}
+          {/* SENSORS (CRITICAL HITS) */}
           <div className="flex items-center gap-1.5 bg-slate-800/90 px-2 py-1 rounded border border-emerald-500/40">
             <Crosshair size={14} className="text-emerald-400" />
-            <span className="text-[11px] font-bold text-emerald-300">
-              SEN (4)
+            <span className="text-[11px] font-bold text-emerald-300" title="+10% Critical Hit Chance (2x damage) per Level">
+              SEN ({subsystemLevels.sensors}/5)
             </span>
-            <div className="flex gap-0.5 mx-1">
-              {[...Array(6)].map((_, i) => (
+            <div className="flex gap-0.5 mx-1" title={`${subsystemLevels.sensors * 10}% Critical Hit Chance`}>
+              {[...Array(5)].map((_, i) => (
                 <div
                   key={i}
                   className={`w-2 h-3.5 rounded-sm ${
-                    i < powerGrid.sensors ? 'bg-emerald-400' : 'bg-slate-700'
+                    i < subsystemLevels.sensors ? 'bg-emerald-400 shadow-[0_0_4px_#10b981]' : 'bg-slate-700'
                   }`}
                 />
               ))}
             </div>
             <button
-              onClick={() => adjustPower('sensors', -1)}
-              className="w-5 h-5 bg-slate-700 hover:bg-slate-600 rounded text-xs text-white font-bold flex items-center justify-center">
+              onClick={() => refundBonusPoint('sensors')}
+              disabled={subsystemLevels.sensors <= 0}
+              className={`w-5 h-5 rounded text-xs font-bold flex items-center justify-center ${
+                subsystemLevels.sensors > 0 ? 'bg-slate-700 hover:bg-slate-600 text-white' : 'bg-slate-800 text-slate-600 cursor-not-allowed'
+              }`}>
               -
             </button>
             <button
-              onClick={() => adjustPower('sensors', 1)}
-              className="w-5 h-5 bg-emerald-600 hover:bg-emerald-500 rounded text-xs text-white font-bold flex items-center justify-center">
+              onClick={() => allocateBonusPoint('sensors')}
+              disabled={bonusPoints <= 0 || subsystemLevels.sensors >= 5}
+              className={`w-5 h-5 rounded text-xs font-bold flex items-center justify-center ${
+                bonusPoints > 0 && subsystemLevels.sensors < 5
+                  ? 'bg-emerald-600 hover:bg-emerald-500 text-white animate-pulse'
+                  : 'bg-slate-800 text-slate-600 cursor-not-allowed'
+              }`}>
               +
             </button>
           </div>
@@ -3081,54 +3576,211 @@ if (bridgeImg && bridgeImg.complete && bridgeImg.naturalWidth > 0) {
       )}
 
       {/* 3. IN-GAME MENU / PAUSE OVERLAY */}
-      {isGameMenuOpen && (
+      {(gameState.status === 'PAUSED' || isGameMenuOpen) && (
         <MenuOverlay tone="neutral" zIndex={50}>
-          <div className="w-full max-w-md flex flex-col items-center bg-slate-900 border-2 border-cyan-500/50 rounded-2xl p-6 shadow-2xl space-y-4">
-            <h2 className="text-2xl font-black text-cyan-400 tracking-wider">
-              BRIDGE MENU
-            </h2>
-
-            <div className="w-full space-y-3">
-              {/* Resume */}
-              <button
-                onClick={() => setIsGameMenuOpen(false)}
-                className="w-full bg-cyan-600 hover:bg-cyan-500 text-slate-950 font-bold py-2.5 rounded-xl transition-colors flex items-center justify-center gap-2">
-                <Play size={18} />
-                RESUME COMMAND
-              </button>
-
-              {/* SFX Mute Toggle */}
+          <div className="w-full max-w-lg flex flex-col items-center bg-slate-900 border-2 border-cyan-500/50 rounded-2xl p-6 shadow-2xl space-y-4 max-h-[90vh] overflow-y-auto">
+            <div className="flex items-center justify-between w-full border-b border-slate-800 pb-2">
+              <h2 className="text-2xl font-black text-cyan-400 tracking-wider flex items-center gap-2">
+                <Pause size={22} className="text-amber-400" />
+                TACTICAL PAUSE & MENU
+              </h2>
               <button
                 onClick={() => {
-                  const muted = gameAudio.toggleMute();
-                  setIsSfxMuted(muted);
+                  setIsGameMenuOpen(false);
+                  setGameState((prev) => ({...prev, status: 'PLAYING'}));
                 }}
-                className="w-full bg-slate-800 hover:bg-slate-700 text-slate-200 font-bold py-2.5 rounded-xl transition-colors flex items-center justify-center gap-2 border border-slate-700">
-                {isSfxMuted ? (
-                  <VolumeX size={18} className="text-red-400" />
-                ) : (
-                  <Volume2 size={18} className="text-cyan-400" />
-                )}
-                SOUND EFFECTS: {isSfxMuted ? 'MUTED' : 'ACTIVE'}
+                className="text-slate-400 hover:text-white p-1 rounded-lg">
+                <X size={20} />
               </button>
+            </div>
 
-              {/* Music Mute Toggle */}
-              <button
-                onClick={() => setIsMusicMuted((prev) => !prev)}
-                className="w-full bg-slate-800 hover:bg-slate-700 text-slate-200 font-bold py-2.5 rounded-xl transition-colors flex items-center justify-center gap-2 border border-slate-700">
-                {isMusicMuted ? (
-                  <VolumeX size={18} className="text-red-400" />
-                ) : (
-                  <Volume2 size={18} className="text-yellow-400" />
-                )}
-                BRIDGE BGM: {isMusicMuted ? 'MUTED' : 'ACTIVE'}
-              </button>
+            {/* Resume button */}
+            <button
+              onClick={() => {
+                setIsGameMenuOpen(false);
+                setGameState((prev) => ({...prev, status: 'PLAYING'}));
+              }}
+              className="w-full bg-gradient-to-r from-cyan-500 to-blue-600 hover:from-cyan-400 hover:to-blue-500 text-slate-950 font-black py-3 rounded-xl transition-all flex items-center justify-center gap-2 shadow-lg shadow-cyan-500/30 text-base">
+              <Play size={20} className="fill-slate-950" />
+              RESUME COMMAND [P / ESC]
+            </button>
 
+            {/* Subsystem Upgrade Points Manager in Pause Menu */}
+            <div className="w-full bg-slate-950/80 p-3.5 rounded-xl border border-slate-800 space-y-2.5">
+              <div className="flex items-center justify-between">
+                <span className="font-bold text-xs uppercase tracking-wider text-slate-300">
+                  Subsystem Upgrades (20 Points Total)
+                </span>
+                <div
+                  className={`px-2.5 py-0.5 rounded-full border text-xs font-bold flex items-center gap-1 ${
+                    bonusPoints > 0
+                      ? 'bg-amber-950 text-amber-300 border-amber-500 animate-pulse'
+                      : 'bg-slate-800 text-slate-400 border-slate-700'
+                  }`}>
+                  <Sparkles size={12} className={bonusPoints > 0 ? 'text-amber-400' : 'text-slate-500'} />
+                  <span>UNSPENT: {bonusPoints}</span>
+                </div>
+              </div>
+
+              {/* Weapons */}
+              <div className="flex items-center justify-between bg-slate-900 px-3 py-2 rounded-lg border border-red-500/30 text-xs">
+                <div>
+                  <div className="font-bold text-red-400">WEAPONS (Lv {subsystemLevels.weapons}/5)</div>
+                  <div className="text-[10px] text-slate-400">+{subsystemLevels.weapons * 20}% Damage to Phasers & Torpedoes</div>
+                </div>
+                <div className="flex items-center gap-1.5">
+                  <button
+                    onClick={() => refundBonusPoint('weapons')}
+                    disabled={subsystemLevels.weapons <= 0}
+                    className="w-6 h-6 rounded bg-slate-800 hover:bg-slate-700 disabled:opacity-40 text-white font-bold flex items-center justify-center">
+                    -
+                  </button>
+                  <span className="font-mono font-bold text-slate-200 w-4 text-center">{subsystemLevels.weapons}</span>
+                  <button
+                    onClick={() => allocateBonusPoint('weapons')}
+                    disabled={bonusPoints <= 0 || subsystemLevels.weapons >= 5}
+                    className="w-6 h-6 rounded bg-red-600 hover:bg-red-500 disabled:opacity-40 text-white font-bold flex items-center justify-center">
+                    +
+                  </button>
+                </div>
+              </div>
+
+              {/* Shields */}
+              <div className="flex items-center justify-between bg-slate-900 px-3 py-2 rounded-lg border border-cyan-500/30 text-xs">
+                <div>
+                  <div className="font-bold text-cyan-400">SHIELDS (Lv {subsystemLevels.shields}/5)</div>
+                  <div className="text-[10px] text-slate-400">+{subsystemLevels.shields * 40} Max Capacity & +{subsystemLevels.shields * 10}% Regen</div>
+                </div>
+                <div className="flex items-center gap-1.5">
+                  <button
+                    onClick={() => refundBonusPoint('shields')}
+                    disabled={subsystemLevels.shields <= 0}
+                    className="w-6 h-6 rounded bg-slate-800 hover:bg-slate-700 disabled:opacity-40 text-white font-bold flex items-center justify-center">
+                    -
+                  </button>
+                  <span className="font-mono font-bold text-slate-200 w-4 text-center">{subsystemLevels.shields}</span>
+                  <button
+                    onClick={() => allocateBonusPoint('shields')}
+                    disabled={bonusPoints <= 0 || subsystemLevels.shields >= 5}
+                    className="w-6 h-6 rounded bg-cyan-600 hover:bg-cyan-500 disabled:opacity-40 text-white font-bold flex items-center justify-center">
+                    +
+                  </button>
+                </div>
+              </div>
+
+              {/* Engines */}
+              <div className="flex items-center justify-between bg-slate-900 px-3 py-2 rounded-lg border border-amber-500/30 text-xs">
+                <div>
+                  <div className="font-bold text-amber-400">ENGINES (Lv {subsystemLevels.engines}/5)</div>
+                  <div className="text-[10px] text-slate-400">+{subsystemLevels.engines * 8}% Dodge Chance vs Attacks & Hazards</div>
+                </div>
+                <div className="flex items-center gap-1.5">
+                  <button
+                    onClick={() => refundBonusPoint('engines')}
+                    disabled={subsystemLevels.engines <= 0}
+                    className="w-6 h-6 rounded bg-slate-800 hover:bg-slate-700 disabled:opacity-40 text-white font-bold flex items-center justify-center">
+                    -
+                  </button>
+                  <span className="font-mono font-bold text-slate-200 w-4 text-center">{subsystemLevels.engines}</span>
+                  <button
+                    onClick={() => allocateBonusPoint('engines')}
+                    disabled={bonusPoints <= 0 || subsystemLevels.engines >= 5}
+                    className="w-6 h-6 rounded bg-amber-600 hover:bg-amber-500 disabled:opacity-40 text-white font-bold flex items-center justify-center">
+                    +
+                  </button>
+                </div>
+              </div>
+
+              {/* Sensors */}
+              <div className="flex items-center justify-between bg-slate-900 px-3 py-2 rounded-lg border border-emerald-500/30 text-xs">
+                <div>
+                  <div className="font-bold text-emerald-400">SENSORS (Lv {subsystemLevels.sensors}/5)</div>
+                  <div className="text-[10px] text-slate-400">+{subsystemLevels.sensors * 10}% Critical Hit Chance (2x Damage)</div>
+                </div>
+                <div className="flex items-center gap-1.5">
+                  <button
+                    onClick={() => refundBonusPoint('sensors')}
+                    disabled={subsystemLevels.sensors <= 0}
+                    className="w-6 h-6 rounded bg-slate-800 hover:bg-slate-700 disabled:opacity-40 text-white font-bold flex items-center justify-center">
+                    -
+                  </button>
+                  <span className="font-mono font-bold text-slate-200 w-4 text-center">{subsystemLevels.sensors}</span>
+                  <button
+                    onClick={() => allocateBonusPoint('sensors')}
+                    disabled={bonusPoints <= 0 || subsystemLevels.sensors >= 5}
+                    className="w-6 h-6 rounded bg-emerald-600 hover:bg-emerald-500 disabled:opacity-40 text-white font-bold flex items-center justify-center">
+                    +
+                  </button>
+                </div>
+              </div>
+            </div>
+
+            {/* Audio Controls with Independent Sliders */}
+            <div className="w-full bg-slate-950/80 p-3.5 rounded-xl border border-slate-800 space-y-3">
+              <span className="font-bold text-xs uppercase tracking-wider text-slate-300">
+                Bridge Audio Adjustments
+              </span>
+
+              {/* BGM Volume Slider */}
+              <div className="flex flex-col gap-1 w-full bg-slate-900 p-2.5 rounded-lg border border-slate-800">
+                <div className="flex justify-between items-center text-xs">
+                  <button
+                    onClick={() => setIsMusicMuted((prev) => !prev)}
+                    className="flex items-center gap-1.5 text-yellow-300 font-bold hover:text-yellow-200">
+                    {isMusicMuted ? <VolumeX size={15} className="text-red-400" /> : <Volume2 size={15} />}
+                    <span>BRIDGE BGM: {isMusicMuted ? 'MUTED' : `${Math.round(musicVolume * 100)}%`}</span>
+                  </button>
+                </div>
+                <input
+                  type="range"
+                  min="0"
+                  max="1"
+                  step="0.05"
+                  value={isMusicMuted ? 0 : musicVolume}
+                  onChange={(e) => {
+                    setIsMusicMuted(false);
+                    setMusicVolume(parseFloat(e.target.value));
+                  }}
+                  className="w-full accent-yellow-400 cursor-pointer h-2 bg-slate-800 rounded-lg mt-1"
+                />
+              </div>
+
+              {/* SFX / Weapons Volume Slider */}
+              <div className="flex flex-col gap-1 w-full bg-slate-900 p-2.5 rounded-lg border border-slate-800">
+                <div className="flex justify-between items-center text-xs">
+                  <button
+                    onClick={() => {
+                      const muted = gameAudio.toggleMute();
+                      setIsSfxMuted(muted);
+                    }}
+                    className="flex items-center gap-1.5 text-cyan-300 font-bold hover:text-cyan-200">
+                    {isSfxMuted ? <VolumeX size={15} className="text-red-400" /> : <Zap size={15} />}
+                    <span>WEAPONS & SFX: {isSfxMuted ? 'MUTED' : `${Math.round(sfxVolume * 100)}%`}</span>
+                  </button>
+                </div>
+                <input
+                  type="range"
+                  min="0"
+                  max="1"
+                  step="0.05"
+                  value={isSfxMuted ? 0 : sfxVolume}
+                  onChange={(e) => {
+                    setIsSfxMuted(false);
+                    const val = parseFloat(e.target.value);
+                    setSfxVolume(val);
+                    gameAudio.setVolume(val);
+                  }}
+                  className="w-full accent-cyan-400 cursor-pointer h-2 bg-slate-800 rounded-lg mt-1"
+                />
+              </div>
+            </div>
+
+            <div className="w-full space-y-2 pt-1">
               {/* How to Play */}
               <button
                 onClick={() => setIsHowToPlayOpen(true)}
-                className="w-full bg-slate-800 hover:bg-slate-700 text-slate-200 font-bold py-2.5 rounded-xl transition-colors flex items-center justify-center gap-2 border border-slate-700">
-                <Info size={18} className="text-emerald-400" />
+                className="w-full bg-slate-800 hover:bg-slate-700 text-slate-200 font-bold py-2.5 rounded-xl transition-colors flex items-center justify-center gap-2 border border-slate-700 text-xs">
+                <Info size={16} className="text-emerald-400" />
                 HOW TO PLAY MANUAL
               </button>
 
@@ -3138,8 +3790,8 @@ if (bridgeImg && bridgeImg.complete && bridgeImg.naturalWidth > 0) {
                   setIsGameMenuOpen(false);
                   initGame();
                 }}
-                className="w-full bg-slate-800 hover:bg-slate-700 text-amber-400 font-bold py-2.5 rounded-xl transition-colors flex items-center justify-center gap-2 border border-slate-700">
-                <RotateCw size={18} />
+                className="w-full bg-slate-800 hover:bg-slate-700 text-amber-400 font-bold py-2.5 rounded-xl transition-colors flex items-center justify-center gap-2 border border-slate-700 text-xs">
+                <RotateCw size={16} />
                 REBOOT SECTOR SIMULATION
               </button>
 
@@ -3149,8 +3801,8 @@ if (bridgeImg && bridgeImg.complete && bridgeImg.naturalWidth > 0) {
                   setIsGameMenuOpen(false);
                   setGameState((prev) => ({...prev, status: 'START'}));
                 }}
-                className="w-full bg-red-950 hover:bg-red-900 text-red-300 font-bold py-2.5 rounded-xl transition-colors flex items-center justify-center gap-2 border border-red-800/40">
-                <ArrowLeft size={18} />
+                className="w-full bg-red-950/80 hover:bg-red-900 text-red-300 font-bold py-2.5 rounded-xl transition-colors flex items-center justify-center gap-2 border border-red-800/40 text-xs">
+                <ArrowLeft size={16} />
                 ABORT TO MAIN MENU
               </button>
             </div>
@@ -3219,101 +3871,7 @@ if (bridgeImg && bridgeImg.complete && bridgeImg.naturalWidth > 0) {
         </MenuOverlay>
       )}
 
-      {/* 5. UPGRADE TERMINAL MODAL (Between Sectors) */}
-      {isUpgradeOpen && (
-        <MenuOverlay tone="neutral" zIndex={50}>
-          <div className="w-full max-w-lg flex flex-col bg-slate-900 border-2 border-yellow-500/60 rounded-2xl p-6 shadow-2xl">
-            <div className="text-center mb-4">
-              <h3 className="text-2xl font-black text-yellow-400 tracking-wider uppercase">
-                STARSHIP UPGRADE TERMINAL
-              </h3>
-              <p className="text-xs text-slate-400">
-                Spend Refined Dilithium Crystals on permanent starship enhancements
-              </p>
-              <div className="mt-2 inline-flex items-center gap-1.5 bg-amber-950/80 px-3 py-1 rounded-full border border-amber-500/50 text-amber-300 font-bold text-sm">
-                <Sparkles size={16} />
-                <span>RESERVE DILITHIUM: {dilithiumReserve}</span>
-              </div>
-            </div>
-
-            <div className="space-y-3 mb-6">
-              {/* Hull Plating */}
-              <div className="flex items-center justify-between bg-slate-950 p-3 rounded-xl border border-slate-800">
-                <div>
-                  <div className="font-bold text-emerald-400 text-sm">
-                    Reinforced Durasteel Hull (Lv. {shipUpgrades.hullPlating})
-                  </div>
-                  <div className="text-[11px] text-slate-400">
-                    +25 Max Hull Integrity per level
-                  </div>
-                </div>
-                <button
-                  onClick={() => buyUpgrade('hullPlating', 2)}
-                  disabled={dilithiumReserve < 2}
-                  className={`px-3 py-1.5 rounded-lg font-bold text-xs ${
-                    dilithiumReserve >= 2
-                      ? 'bg-emerald-600 hover:bg-emerald-500 text-white'
-                      : 'bg-slate-800 text-slate-600 cursor-not-allowed'
-                  }`}>
-                  UPGRADE (2 💎)
-                </button>
-              </div>
-
-              {/* Phased Cannons Mk.II */}
-              <div className="flex items-center justify-between bg-slate-950 p-3 rounded-xl border border-slate-800">
-                <div>
-                  <div className="font-bold text-red-400 text-sm">
-                    Phaser & Torpedo Output (Lv. {shipUpgrades.cannonsMk})
-                  </div>
-                  <div className="text-[11px] text-slate-400">
-                    +20% Laser/Torpedo Damage & +2 Max Torpedoes
-                  </div>
-                </div>
-                <button
-                  onClick={() => buyUpgrade('cannonsMk', 2)}
-                  disabled={dilithiumReserve < 2}
-                  className={`px-3 py-1.5 rounded-lg font-bold text-xs ${
-                    dilithiumReserve >= 2
-                      ? 'bg-red-600 hover:bg-red-500 text-white'
-                      : 'bg-slate-800 text-slate-600 cursor-not-allowed'
-                  }`}>
-                  UPGRADE (2 💎)
-                </button>
-              </div>
-
-              {/* Shield Matrix */}
-              <div className="flex items-center justify-between bg-slate-950 p-3 rounded-xl border border-slate-800">
-                <div>
-                  <div className="font-bold text-cyan-400 text-sm">
-                    Subspace Deflector Matrix (Lv. {shipUpgrades.shieldMatrix})
-                  </div>
-                  <div className="text-[11px] text-slate-400">
-                    +20 Max Deflector Shield Capacity
-                  </div>
-                </div>
-                <button
-                  onClick={() => buyUpgrade('shieldMatrix', 2)}
-                  disabled={dilithiumReserve < 2}
-                  className={`px-3 py-1.5 rounded-lg font-bold text-xs ${
-                    dilithiumReserve >= 2
-                      ? 'bg-cyan-600 hover:bg-cyan-500 text-slate-950'
-                      : 'bg-slate-800 text-slate-600 cursor-not-allowed'
-                  }`}>
-                  UPGRADE (2 💎)
-                </button>
-              </div>
-            </div>
-
-            <button
-              onClick={() => setIsUpgradeOpen(false)}
-              className="w-full bg-yellow-500 hover:bg-yellow-400 text-slate-950 font-black py-3 rounded-xl transition-colors">
-              ENGAGE SECTOR {gameState.level}
-            </button>
-          </div>
-        </MenuOverlay>
-      )}
-
-      {/* 6. GAME OVER OVERLAY */}
+      {/* 5. GAME OVER OVERLAY */}
       {gameState.status === 'GAME_OVER' && (
         <Overlay
           title="STARSHIP DESTROYED"
@@ -3325,11 +3883,11 @@ if (bridgeImg && bridgeImg.complete && bridgeImg.naturalWidth > 0) {
         />
       )}
 
-      {/* 7. VICTORY OVERLAY */}
+      {/* 6. VICTORY OVERLAY */}
       {gameState.status === 'VICTORY' && (
         <Overlay
-          title="SECTOR 5 SECURED"
-          description={`Flawless Command, Captain! The Alien Command Dreadnought has been neutralized. Final Score: ${gameState.score}`}
+          title="SECTOR 25 SECURED - DOMINION DEFEATED"
+          description={`Flawless Command, Captain! The Supreme Flagship Command Dreadnought has been neutralized and the galaxy is saved. Final Score: ${gameState.score}`}
           actionLabel="COMMAND AGAIN"
           onAction={initGame}
           icon={<Trophy size={24} />}
